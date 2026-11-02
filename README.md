@@ -29,7 +29,7 @@ Guide officiel : https://docs.ovhcloud.com/fr/guides/web-cloud/web-hosting/git-i
 PHP `mail()` : https://www.php.net/manual/fr/function.mail.php (acceptation ne signifie pas réception).
 
 ## État du site
-Design et contenus inchangés par cette correction. Les mentions du médiateur restent à compléter. L’indexation demeure bloquée (`noindex,nofollow` et `robots.txt`) jusqu’à validation finale. Aucun déploiement OVH n’est effectué par cette correction GitHub.
+Design et contenus inchangés par cette correction. Les mentions du médiateur restent à compléter. L’exploration et l’indexation sont autorisées pour les pages publiques ; le sitemap déclare leurs URL HTTPS sans www. Cela ne garantit ni leur indexation effective ni leur classement par les moteurs. Aucun déploiement OVH n’est effectué par cette correction GitHub.
 
 ## Ressources
 Police Montserrat hébergée localement, licence dans `assets/fonts/OFL.txt`. Les autres contenus graphiques restent soumis aux droits de leurs titulaires. Ce dépôt n’accorde pas de licence de réutilisation des photographies et de l’identité visuelle JMC.
