@@ -1,0 +1,27 @@
+Options -Indexes
+DirectoryIndex index.html
+<IfModule mod_rewrite.c>
+RewriteEngine On
+# Production only. Enable the SSL certificate in OVH before uploading.
+RewriteCond %{HTTP_HOST} ^(www\.)?jmcpropretenature\.fr$ [NC]
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://jmcpropretenature.fr%{REQUEST_URI} [R=301,L]
+RewriteCond %{HTTP_HOST} ^www\.jmcpropretenature\.fr$ [NC]
+RewriteRule ^ https://jmcpropretenature.fr%{REQUEST_URI} [R=301,L]
+</IfModule>
+<IfModule mod_headers.c>
+Header set X-Content-Type-Options "nosniff"
+Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+<FilesMatch "\.(md|py)$">
+Require all denied
+</FilesMatch>
+
+# Protection des métadonnées Git et fichiers de configuration si déployés par OVH.
+<IfModule mod_rewrite.c>
+RewriteRule (^|/)\.(git|env)(/|$|\.) - [F,L,NC]
+RewriteRule ^(jmc-private|configuration-privee)(/|$) - [F,L,NC]
+</IfModule>
+<FilesMatch "(?i)^(contact-config.*\.php|\.gitignore|.*\.(key|pem|p12|pfx|bak|backup|sql|sqlite|log))$">
+Require all denied
+</FilesMatch>

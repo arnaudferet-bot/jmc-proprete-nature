@@ -1,0 +1,19 @@
+# Configuration et données privées : jamais dans le dépôt public.
+/jmc-private/
+/configuration-privee/
+/contact-config*.php
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+*.sqlite*
+*.sql
+*.zip
+*.bak
+*.backup
+.DS_Store
+Thumbs.db
