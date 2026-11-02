@@ -46,7 +46,7 @@ html{scroll-padding-top:150px}nav{font-size:13px}.intro{font-size:15px}.section-
 .hero h1.hero-title-partner{font-size:clamp(36px,3.35vw,53px);line-height:1.17;letter-spacing:-1.8px}
 .hero-title-partner em{color:#66A742}
 @media(max-width:1000px) and (min-width:701px){.hero h1.hero-title-partner{font-size:36px;letter-spacing:-1.2px}}
-@media(max-width:700px){.hero h1.hero-title-partner{font-size:clamp(29px,8.5vw,39px);line-height:1.18;letter-spacing:-1.1px}.hero-title-partner br{display:none}}
+@media(max-width:700px){.hero h1.hero-title-partner{font-size:clamp(27px,8.2vw,35px);line-height:1.18;letter-spacing:-1.1px}.hero-title-partner br{display:none}.hero-title-partner .hero-title-mobile-line{display:block;white-space:nowrap}}
 /* Les descriptions s’étirent pour aligner clientèles et liens malgré les longueurs différentes. */
 #expertises .service>p:not(.for){flex:1}
 #expertises .service>.for{min-height:42px}
