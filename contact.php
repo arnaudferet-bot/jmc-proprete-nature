@@ -2,6 +2,10 @@
 declare(strict_types=1);
 // PHP 8.2+ ; aucun contenu de demande ni secret dans les journaux applicatifs.
 ini_set('display_errors', '0');
+ini_set('log_errors', '0');
+ini_set('zend.exception_ignore_args', '1');
+// Ne jamais journaliser des arguments susceptibles de contenir les champs du formulaire.
+set_error_handler(static function (): never { throw new RuntimeException('contact technical failure'); });
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, private');
 header('X-Content-Type-Options: nosniff');
@@ -13,17 +17,86 @@ function respond(int $status, array $data): never {
 set_exception_handler(function (Throwable $error): void {
     respond(503, ['ok' => false, 'message' => 'L’envoi est momentanément indisponible. Vos informations sont conservées dans le formulaire. Vous pouvez réessayer plus tard ou nous écrire à arnaud.feret@jmcpropretenature.fr.']);
 });
-$configPath = dirname(__DIR__) . '/jmc-private/contact-config.php';
-if (!is_file($configPath)) respond(503, ['ok'=>false, 'message'=>'L’envoi n’est pas encore activé. Vos informations sont conservées dans le formulaire. Vous pouvez nous écrire à arnaud.feret@jmcpropretenature.fr.']);
-$config = require $configPath;
-if (!is_array($config) || ($config['enabled'] ?? false) !== true || strlen((string)($config['rate_secret'] ?? '')) < 64) {
-    respond(503, ['ok'=>false, 'message'=>'L’envoi n’est pas encore activé. Vos informations sont conservées dans le formulaire. Vous pouvez nous écrire à arnaud.feret@jmcpropretenature.fr.']);
+// Stockage créé sur l’hébergement : jamais de secret dans Git ou dans la racine web.
+// En cas d’impossibilité de sécuriser ce stockage, refuser l’envoi.
+function outsideWeb(string $path, array $roots): bool {
+    foreach ($roots as $root) {
+        if ($path === $root || str_starts_with($path, rtrim($root, '/') . '/')) return false;
+    }
+    return true;
+}
+function privateDirectory(string $path): void {
+    clearstatcache(true, $path);
+    if (is_link($path)) throw new RuntimeException('unsafe storage');
+    if (!file_exists($path) && !mkdir($path, 0700)) throw new RuntimeException('storage unavailable');
+    if (!is_dir($path) || !chmod($path, 0700)) throw new RuntimeException('storage permissions');
+    clearstatcache(true, $path);
+    if ((fileperms($path) & 0077) !== 0 || !is_writable($path)) throw new RuntimeException('storage permissions');
+    if (function_exists('posix_geteuid') && fileowner($path) !== posix_geteuid()) throw new RuntimeException('storage owner');
+}
+function privateFile(string $path) {
+    clearstatcache(true, $path);
+    if (is_link($path) || (file_exists($path) && !is_file($path))) throw new RuntimeException('unsafe file');
+    $handle = fopen($path, 'c+b');
+    if (!$handle || !chmod($path, 0600)) throw new RuntimeException('file unavailable');
+    clearstatcache(true, $path);
+    if ((fileperms($path) & 0077) !== 0) throw new RuntimeException('file permissions');
+    if (function_exists('posix_geteuid') && fileowner($path) !== posix_geteuid()) throw new RuntimeException('file owner');
+    return $handle;
+}
+function initialiseStorage(string $site): array {
+    umask(0077);
+    $roots = [$site];
+    $documentRoot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
+    if ($documentRoot !== false) $roots[] = $documentRoot;
+    $suffix = substr(hash('sha256', $site), 0, 24);
+    $bases = [dirname($site), sys_get_temp_dir()];
+    foreach (array_unique($bases) as $base) {
+        try {
+            $base = realpath($base);
+            if ($base === false) continue;
+            $path = $base . '/.jmc-contact-' . $suffix;
+            if (!outsideWeb($path, $roots)) continue;
+            privateDirectory($path);
+            $resolved = realpath($path);
+            if ($resolved === false || !outsideWeb($resolved, $roots)) continue;
+            privateDirectory($resolved . '/sessions');
+            $lock = privateFile($resolved . '/initialisation.lock');
+            if (!flock($lock, LOCK_EX)) throw new RuntimeException('storage lock');
+            try {
+                $secretFile = $resolved . '/secret';
+                clearstatcache(true, $secretFile);
+                if (!file_exists($secretFile) && !is_link($secretFile)) {
+                    $secret = bin2hex(random_bytes(32));
+                    $secretHandle = fopen($secretFile, 'x+b');
+                    if (!$secretHandle || fwrite($secretHandle, $secret) !== 64 || !fflush($secretHandle)) throw new RuntimeException('secret unavailable');
+                    fclose($secretHandle);
+                }
+                $secretHandle = privateFile($secretFile);
+                $secret = stream_get_contents($secretHandle, 65);
+                fclose($secretHandle);
+                if (!is_string($secret) || !preg_match('/\A[a-f0-9]{64}\z/', $secret)) throw new RuntimeException('invalid runtime secret');
+            } finally {
+                flock($lock, LOCK_UN);
+                fclose($lock);
+            }
+            return ['path' => $resolved, 'secret' => $secret];
+        } catch (Throwable $error) {
+            // Aucun chemin privé, contenu utilisateur ou secret dans les logs/réponses.
+        }
+    }
+    throw new RuntimeException('private storage unavailable');
 }
 $method = $_SERVER['REQUEST_METHOD'] ?? '';
 if (!in_array($method, ['GET','POST'], true)) { header('Allow: GET, POST'); respond(405, ['ok'=>false,'message'=>'Méthode non autorisée.']); }
 // Ne pas faire confiance aux en-têtes X-Forwarded-* fournis par le client.
 $https = isset($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off';
 if (!$https) respond(403, ['ok'=>false,'message'=>'Une connexion HTTPS est nécessaire pour envoyer votre demande.']);
+$storage = initialiseStorage((string)realpath(__DIR__));
+session_save_path($storage['path'] . '/sessions');
+ini_set('session.gc_maxlifetime', '3600');
+ini_set('session.gc_probability', '1');
+ini_set('session.gc_divisor', '100');
 ini_set('session.use_strict_mode','1');
 ini_set('session.use_only_cookies','1');
 session_name('JMC_CONTACT');
@@ -56,22 +129,35 @@ foreach (['nom','profil','email','telephone','activite','commune','message'] as 
 if (field('consentement',5)!=='1') respond(422,['ok'=>false,'message'=>'Veuillez confirmer avoir pris connaissance de la politique de confidentialité.']);
 if (!filter_var($values['email'], FILTER_VALIDATE_EMAIL)) respond(422,['ok'=>false,'message'=>'Vérifiez votre adresse e-mail.']);
 if (!in_array($values['profil'],['Particulier','Professionnel','Syndic de copropriété','Agence immobilière'],true) || !in_array($values['activite'],['Espaces verts','Ménage et entretien','Vitres et vitrines','Petits travaux et maintenance','Plusieurs activités'],true)) respond(422,['ok'=>false,'message'=>'Sélectionnez un profil et une activité valides.']);
-$from = $config['from'] ?? '';
-if (!is_string($from) || !preg_match('/\A[a-zA-Z0-9._+-]+@jmcpropretenature\.fr\z/',$from) || !filter_var($from,FILTER_VALIDATE_EMAIL)) throw new RuntimeException('invalid sender');
-$directory = $config['rate_directory'] ?? '';
-if (!is_string($directory) || !is_dir($directory) || !is_writable($directory)) throw new RuntimeException('rate storage unavailable');
-// Un compteur par IP, pseudonymisé avec secret ; ne pas utiliser X-Forwarded-For.
-$key = hash_hmac('sha256',(string)($_SERVER['REMOTE_ADDR'] ?? 'unknown'),$config['rate_secret']);
-$handle=fopen($directory.'/'.$key.'.json','c+');
-if (!$handle || !flock($handle,LOCK_EX)) throw new RuntimeException('lock unavailable');
-$entries=json_decode(stream_get_contents($handle),true);
-$entries=array_values(array_filter(is_array($entries)?$entries:[],static fn($t)=>is_int($t)&&$t>$now-900));
-if(count($entries)>=5){flock($handle,LOCK_UN);fclose($handle);header('Retry-After: 900');respond(429,['ok'=>false,'message'=>'Trop de tentatives. Veuillez réessayer dans 15 minutes. Votre saisie est conservée.']);}
-$entries[]=$now;rewind($handle);ftruncate($handle,0);
-if (fwrite($handle,json_encode($entries))===false) throw new RuntimeException('write unavailable');
-fflush($handle);flock($handle,LOCK_UN);fclose($handle);
-// Purge des compteurs périmés, pas de conservation indéfinie des identifiants IP.
-foreach (glob($directory.'/*.json') ?: [] as $file) if (is_file($file) && filemtime($file)<$now-86400) @unlink($file);
+$from = 'arnaud.feret@jmcpropretenature.fr';
+// Fichier unique borné : uniquement empreintes IP et horodatages, aucun champ du formulaire.
+$handle = privateFile($storage['path'] . '/rate-limits.json');
+if (!flock($handle, LOCK_EX)) throw new RuntimeException('rate lock');
+try {
+    $raw = stream_get_contents($handle, 200001);
+    if (strlen($raw) > 200000) throw new RuntimeException('rate storage size');
+    $buckets = $raw === '' ? [] : json_decode($raw, true, 32, JSON_THROW_ON_ERROR);
+    if (!is_array($buckets)) throw new RuntimeException('invalid rate storage');
+    foreach ($buckets as $key => $times) {
+        if (!is_array($times)) throw new RuntimeException('invalid rate data');
+        $buckets[$key] = array_values(array_filter($times, static fn($t) => is_int($t) && $t > $now - 900));
+        if ($buckets[$key] === []) unset($buckets[$key]);
+    }
+    $key = hash_hmac('sha256', (string)($_SERVER['REMOTE_ADDR'] ?? 'unknown'), $storage['secret']);
+    $attempts = $buckets[$key] ?? [];
+    $total = array_sum(array_map('count', $buckets));
+    if (count($attempts) >= 5 || $total >= 100) {
+        flock($handle, LOCK_UN); fclose($handle);
+        header('Retry-After: 900');
+        respond(429, ['ok'=>false,'message'=>'Trop de tentatives. Veuillez réessayer dans 15 minutes. Votre saisie est conservée.']);
+    }
+    $attempts[] = $now; $buckets[$key] = $attempts;
+    $encoded = json_encode($buckets, JSON_THROW_ON_ERROR);
+    rewind($handle);
+    if (!ftruncate($handle, 0) || fwrite($handle, $encoded) !== strlen($encoded) || !fflush($handle)) throw new RuntimeException('rate write');
+} finally {
+    if (is_resource($handle)) { flock($handle, LOCK_UN); fclose($handle); }
+}
 $subject='Nouvelle demande de devis JMC – '.$values['nom'];
 $words=[]; $chunk='';
 foreach (preg_split('//u',$subject,-1,PREG_SPLIT_NO_EMPTY) as $char) {
